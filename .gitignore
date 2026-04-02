@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Docker & OS
+.DS_Store
+thumbs.db
+
+# Données du projet (IMPORTANT)
+shared/*.jpg
+models/*.pth
+worker/coe_sol/private/

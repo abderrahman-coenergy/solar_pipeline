@@ -1,0 +1,65 @@
+
+
+services:
+
+  # ─────────────────────────────────────────────
+  # 1. Message broker
+  # ─────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Dashboard web → http://localhost:15672 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # ─────────────────────────────────────────────
+  # 2. Capteur (producteur de mesures)
+  # ─────────────────────────────────────────────
+  sensor:
+    build:
+      context: ./sensor
+    container_name: sensor
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      INTERVAL_SECONDS: "3"   # fréquence d'envoi des mesures
+    volumes:
+      - ./shared:/app/shared   # images ciel partagées
+
+# ─────────────────────────────────────────────
+  # 3. Worker Celery (consommateur + traitement)
+  # ─────────────────────────────────────────────
+  worker:
+    build:
+      context: ./worker
+    container_name: worker
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_HOST: rabbitmq
+    volumes:
+      - ./shared:/app/shared
+    # La commande qui DOIT être exécutée, avec les bonnes options
+    command: celery -A tasks worker --loglevel=info -Q solar_tasks -E
+
+  # ---> NOUVELLE SECTION À AJOUTER <---
+  flower:
+    image: mher/flower
+    # On lui indique où est le Broker pour qu'il puisse espionner les tâches
+    command: celery --broker=amqp://guest:guest@rabbitmq:5672// flower
+    ports:
+      - "5555:5555" #[Tunnel Windows] : [Port Interne]
+    depends_on:
+      - rabbitmq
+      - worker
