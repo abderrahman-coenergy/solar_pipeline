@@ -1,15 +1,34 @@
-# Python
+# ── Modèles IA (régénérés au docker build, ~500 Mo) ────────────────────────
+torch_cache/
+
+# ── Images ciel générées au runtime ────────────────────────────────────────
+shared/
+
+# ── Poids SAM (trop lourds pour Git, >2 Go) ────────────────────────────────
+worker/coe_sol/private/*.pth
+worker/coe_sol/private/*.pt
+
+# ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
-*.py[cod]
-*$py.class
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Environnements virtuels ──────────────────────────────────────────────────
 venv/
-.env
+.venv/
+env/
 
-# Docker & OS
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
-thumbs.db
-
-# Données du projet (IMPORTANT)
-shared/*.jpg
-models/*.pth
-worker/coe_sol/private/
+Thumbs.db

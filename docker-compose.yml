@@ -32,7 +32,7 @@ services:
         condition: service_healthy
     environment:
       RABBITMQ_HOST: rabbitmq
-      INTERVAL_SECONDS: "3"   # fréquence d'envoi des mesures
+      INTERVAL_SECONDS: "60"   # fréquence d'envoi des mesures
     volumes:
       - ./shared:/app/shared   # images ciel partagées
 
@@ -50,8 +50,9 @@ services:
       RABBITMQ_HOST: rabbitmq
     volumes:
       - ./shared:/app/shared
+      - ./torch_cache:/root/.cache/torch
     # La commande qui DOIT être exécutée, avec les bonnes options
-    command: celery -A tasks worker --loglevel=info -Q solar_tasks -E
+    command: celery -A tasks worker --loglevel=info --concurrency=1 -Q solar_tasks -E
 
   # ---> NOUVELLE SECTION À AJOUTER <---
   flower:
