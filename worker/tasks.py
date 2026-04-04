@@ -21,7 +21,6 @@ def _ensure_timestamp_str(ts) -> str:
     """
     Garantit que le timestamp est une string "YYYY-MM-DD HH:MM:SS.000"
     attendu par ModelKd.format_hour_no_24().
-
     - sensor.py corrigé envoie déjà une string  → retourne tel quel
     - ancien message avec float Unix             → convertit en string
     """
@@ -61,50 +60,36 @@ def process_solar_measurement(self, message: dict) -> dict:
         # =====================================================================
         # ÉTAPE 2 : MODÉLISATION PHYSIQUE (SolarModel.py + ModelKd.py)
         # =====================================================================
-        log.info("Étape 2 : Configuration du modèle physique (Perez Model)...")
-        options = sm.SolarModelOptions(
-            latitude=48.8566,
-            longitude=2.3522,
-            elevation_meter=35,
-            use_riso=True
-        )
+        log.info("Étape 2 : Configuration du modèle physique...")
+        options = sm.SolarModelOptions(latitude=48.85, longitude=2.35, elevation_meter=35, use_riso=True)
         model = sm.SolarModel(options=options)
 
-        # ── Pyranomètre d'origine (horizontal, mesure le GHI brut) ──────────
-        info_origin = sm.PyranoInfo(
-            azimuth_deg=0.0,
-            inclination_deg=0.0,
-            horizon=horizon_profile.tolist()
-        )
-        measures_origin = sm.PyranoMeasure(
-            timestamps=np.array([timestamp_str]),
-            values=np.array([irr_raw])
-        )
-        origin_pyrano = sm.RealPyrano(info=info_origin, measures=measures_origin)
-        model.set_origin(origin_pyrano)
+        # ── A. Le Pyranomètre d'Origine (Zénith) ──────────
+        irr_origin = message["origin"]["irradiance"]
+        
+        info_origin = sm.PyranoInfo(azimuth_deg=0.0, inclination_deg=0.0, horizon=horizon_profile.tolist())
+        meas_origin = sm.PyranoMeasure(timestamps=np.array([timestamp_str]), values=np.array([irr_origin]))
+        
+        model.set_origin(sm.RealPyrano(info=info_origin, measures=meas_origin))
 
-        # ── Pyranomètre fit (identitaire pour l'instant) ─────────────────────
-        # fit_parameters() exige au moins un RealPyrano via add_fit().
-        # On réutilise la même mesure que l'origin.
-        # En production : remplacer par message.get("irradiance_fit", irr_raw)
-        # dès qu'un second pyranomètre physique incliné sera disponible.
-        fit_info = sm.PyranoInfo(
-            azimuth_deg=0.0,
-            inclination_deg=0.0,
-            horizon=horizon_profile.tolist()
-        )
-        fit_measures = sm.PyranoMeasure(
-            timestamps=np.array([timestamp_str]),
-            values=np.array([irr_raw])
-        )
-        model.add_fit(sm.RealPyrano(info=fit_info, measures=fit_measures))
+        # ── B. Les Pyranomètres de Fit (Le balayage) ──────
+        fits_data = message.get("fits",[])
+        
+        for fit in fits_data:
+            fit_info = sm.PyranoInfo(
+                azimuth_deg=fit["azimuth"],
+                inclination_deg=fit["inclination"],
+                horizon=horizon_profile.tolist() # On utilise le même horizon pour tout le toit
+            )
+            fit_meas = sm.PyranoMeasure(
+                timestamps=np.array([timestamp_str]),
+                values=np.array([fit["irradiance"]])
+            )
+            model.add_fit(sm.RealPyrano(info=fit_info, measures=fit_meas))
+            log.info(f"  + Ajout Fit: {fit['irradiance']:.1f}W/m² (Az:{fit['azimuth']}°, Inc:{fit['inclination']}°)")
 
-        # ── Pyranomètre cible virtuel (mur Sud incliné à 90°) ────────────────
-        target_info = sm.PyranoInfo(
-            azimuth_deg=180.0,
-            inclination_deg=90.0,
-            horizon=np.zeros(360).tolist()
-        )
+        # ── C. La Façade Cible Virtuelle (Mur Sud) ────────
+        target_info = sm.PyranoInfo(azimuth_deg=180.0, inclination_deg=90.0, horizon=np.zeros(360).tolist())
         model.add_target(sm.VirtualPyrano(target_info))
 
         # =====================================================================

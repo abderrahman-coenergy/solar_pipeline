@@ -51,34 +51,50 @@ def run():
     measure_id = 0
     while True:
         measure_id += 1
-        hour_fraction  = (time.time() % 86400) / 86400
-        irradiance_raw = simulate_irradiance(hour_fraction)
+        
+        # 1. On génère l'image (qui représente l'environnement physique)
         sky_img, cloud_cover_true = generate_sky_image(size=256)
-
         img_path = f"/app/shared/sky_{measure_id:05d}.jpg"
         cv2.imwrite(img_path, sky_img)
-
-        _, buf  = cv2.imencode(".jpg", sky_img)
-        img_b64 = base64.b64encode(buf).decode()
-
-        # ── FIX bug #1 : envoyer le timestamp comme string "YYYY-MM-DD HH:MM:SS.000"
-        # ModelKd.format_hour_no_24() attend ce format exact (parse("{}-{}-{} {}:{}:{}")).
-        # time.time() retourne un float qui crasherait à la désérialisation.
+        
+        # 2. Le Timestamp commun pour le "scan"
         now_utc       = datetime.now(timezone.utc)
         timestamp_str = now_utc.strftime("%Y-%m-%d %H:%M:%S.000")
-
+        
+        # 3. Simulation du balayage (Les 4 positions du pyranomètre)
+        hour_fraction = (time.time() % 86400) / 86400
+        base_irr      = simulate_irradiance(hour_fraction)
+        
+        # Position 0 : Zénith (Origin - GHI)
+        mesure_origin = base_irr
+        
+        # Position 1 : Sud, incliné à 45°
+        mesure_fit_1 = base_irr * 1.1 # Simule plus de lumière au Sud
+        
+        # Position 2 : Est, incliné à 60°
+        mesure_fit_2 = base_irr * 0.8 # Simule moins de lumière
+        
+        # Position 3 : Ouest, incliné à 60°
+        mesure_fit_3 = base_irr * 0.6 # Simule encore moins
+        
+        # 4. Construction du message JSON structuré
         message = {
-            "id":             measure_id,
-            "timestamp":      timestamp_str,          # ← string, plus float
-            "irradiance_raw": irradiance_raw,
-            "cloud_cover_gt": round(cloud_cover_true, 4),
-            "image_path":     img_path,
-            "image_b64":      img_b64,
+            "id": measure_id,
+            "timestamp": timestamp_str,
+            "image_path": img_path,
+            "origin": {
+                "irradiance": mesure_origin
+            },
+            "fits":[
+                {"azimuth": 180.0, "inclination": 45.0, "irradiance": mesure_fit_1},
+                {"azimuth": 90.0,  "inclination": 60.0, "irradiance": mesure_fit_2},
+                {"azimuth": 270.0, "inclination": 60.0, "irradiance": mesure_fit_3}
+            ]
         }
 
         try:
             celery_app.send_task("solar.process_measurement", args=[message], queue=QUEUE_NAME)
-            log.info(f"[#{measure_id:05d}] Tâche envoyée → irr={irradiance_raw} W/m² | cloud={cloud_cover_true:.1%} | t={timestamp_str}")
+            log.info(f"[#{measure_id:05d}] Scan complet envoyé (Origin + 3 Fits) | t={timestamp_str}")
         except OperationalError as e:
             log.error(f"[#{measure_id:05d}] RECONNEXION - Impossible d'envoyer la tâche : {e}")
             wait_for_rabbitmq(celery_app)
