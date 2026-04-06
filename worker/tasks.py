@@ -34,7 +34,6 @@ def _ensure_timestamp_str(ts) -> str:
 def process_solar_measurement(self, message: dict) -> dict:
     task_id   = self.request.id
     msg_id    = message.get("id", "?")
-    irr_raw   = message.get("irradiance_raw", 0.0)
     img_path  = message.get("image_path")
     timestamp = message.get("timestamp", time.time())
 
@@ -105,7 +104,7 @@ def process_solar_measurement(self, message: dict) -> dict:
 
         return {
             "measure_id":         msg_id,
-            "input_ghi":          irr_raw,
+            "input_ghi":          irr_origin,
             "timestamp_utc":      timestamp_str,
             "results":            projection_data,
             "processing_time_ms": elapsed_ms,
