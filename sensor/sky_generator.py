@@ -82,16 +82,14 @@ def _sky_scene(theta: np.ndarray, phi: np.ndarray,
     N = len(theta)
     rgb = np.zeros((N, 3), dtype=np.float32)
 
-    # --- Fond de ciel (dégradé zénith → horizon) ---
-    # theta va de 0 (zénith) à pi/2 (horizon) dans le hémisphère supérieur
+    # --- 1. Fond de ciel (dégradé zénith → horizon) ---
     t = np.clip(theta / (math.pi / 2.0), 0.0, 1.0)  # 0=zénith, 1=horizon
     sky_zenith  = np.array([100., 160., 230.], dtype=np.float32)  # bleu foncé
     sky_horizon = np.array([180., 220., 255.], dtype=np.float32)  # bleu clair
     for c in range(3):
         rgb[:, c] = sky_zenith[c] * (1 - t) + sky_horizon[c] * t
 
-    # --- Soleil ---
-    # Distance angulaire entre chaque pixel et la position du soleil
+    # --- 2. Soleil ---
     cos_sun = (np.cos(theta) * np.cos(sun_theta) +
                np.sin(theta) * np.sin(sun_theta) * np.cos(phi - sun_phi))
     cos_sun = np.clip(cos_sun, -1.0, 1.0)
@@ -105,7 +103,7 @@ def _sky_scene(theta: np.ndarray, phi: np.ndarray,
     rgb[halo_mask, 0] = np.minimum(255., rgb[halo_mask, 0] + 60. * (1 - halo_t))
     rgb[halo_mask, 1] = np.minimum(255., rgb[halo_mask, 1] + 40. * (1 - halo_t))
 
-    # --- Nuages ---
+    # --- 3. Nuages ---
     for (c_theta, c_phi, c_r, c_alpha) in cloud_params:
         cos_c = (np.cos(theta) * np.cos(c_theta) +
                  np.sin(theta) * np.sin(c_theta) * np.cos(phi - c_phi))
@@ -116,8 +114,28 @@ def _sky_scene(theta: np.ndarray, phi: np.ndarray,
         rgb[cloud_mask] = (rgb[cloud_mask] * (1. - blend) +
                            np.array([255., 255., 255.]) * blend)
 
-    return np.clip(rgb, 0., 255.).astype(np.uint8)
+    # --- 4. NOUVEAU : Horizon Urbain (Bâtiments) ---
+    # On simule 3 gros bâtiments à différents azimuts
+    buildings =[
+        {"azimuth": 0.0, "width": 0.5, "height_angle": math.pi / 4},    # Bâtiment Nord, monte jusqu'à 45°
+        {"azimuth": 1.5, "width": 0.3, "height_angle": math.pi / 6},    # Bâtiment Est, monte à 30°
+        {"azimuth": -2.0, "width": 0.8, "height_angle": math.pi / 3},   # Gros bâtiment Ouest, monte à 60°
+    ]
+    
+    for b in buildings:
+        # phi est entre -pi et pi. On regarde la distance à l'azimut du bâtiment.
+        # On utilise une astuce avec cos() pour gérer le rebouclage à pi/-pi.
+        ang_dist = np.arccos(np.clip(np.cos(phi - b["azimuth"]), -1.0, 1.0))
+        
+        # Le masque du bâtiment : il faut être dans la bonne direction (ang_dist < width)
+        # ET assez bas sur l'horizon (theta > hauteur du bâtiment depuis le zénith)
+        zenith_distance = (math.pi / 2.0) - b["height_angle"]
+        building_mask = (ang_dist < b["width"]) & (theta > zenith_distance)
+        
+        # On dessine les bâtiments en gris très foncé (presque noir)
+        rgb[building_mask] =[30., 30., 35.]
 
+    return np.clip(rgb, 0., 255.).astype(np.uint8)
 
 def _ground_scene(theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
     """

@@ -1,222 +1,139 @@
-# Pipeline Prédiction Flux Solaire
-## Architecture complète : Pyranomètre → RabbitMQ → Celery → OpenCV
+# Pipeline Prédiction Irradiance Solaire : IA & Modèle de Perez
 
-```
-┌──────────────┐     basic_publish()     ┌─────────────┐    basic_consume()    ┌──────────────────┐
-│  sensor.py   │ ───────────────────────▶│  RabbitMQ   │ ────────────────────▶ │  Celery Worker   │
-│              │                         │  (broker)   │                        │                  │
-│ • Mesure brut│                         │ queue:      │                        │ • analyze_sky()  │
-│ • Génère img │                         │ solar_tasks │                        │ • OpenCV clouds  │
-│ • JSON msg   │                         │             │                        │ • Corrige irr.   │
-└──────────────┘                         └─────────────┘                        └──────────────────┘
+Ce projet est une infrastructure asynchrone complète (End-to-End) permettant de simuler, d'acquérir et de prédire le flux solaire en milieu urbain. Il combine **une architecture distribuée (RabbitMQ/Celery)**, de la **Vision par Intelligence Artificielle (MiDaS)** et de la **physique atmosphérique avancée (Modèle Anisotrope de Perez via `coe_sol`)**.
+
+## 🏗 Architecture de la Pipeline
+
+```text
+┌──────────────────┐    celery.send_task()   ┌─────────────┐      Consomme      ┌────────────────────────────┐
+│    sensor.py     │ ───────────────────────▶│  RabbitMQ   │ ──────────────────▶│       Celery Worker        │
+│  (Pyranomètre)   │                         │  (broker)   │                    │ (Intelligence logicielle)  │
+│                  │                         │ queue:      │                    │                            │
+│ • Génère image   │   Volume Partagé (I/O)  │ solar_tasks │                    │ • 1. IA MiDaS (Horizon)    │
+│ • Simule Scan 360│ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │             │                    │ • 2. Fitting Perez (kd)    │
+│ • JSON structuré │                         │             │                    │ • 3. Projection sur façade │
+└──────────────────┘                         └─────────────┘                    └────────────────────────────┘
 ```
 
 ---
 
-## Lancement rapide
+## 🚀 Lancement rapide
 
 ```bash
-# 1. Cloner / se placer dans le dossier
+# 1. Cloner le dépôt et se placer dans le dossier
 cd solar_pipeline
 
-# 2. Créer le dossier partagé (images ciel)
-mkdir -p shared
+# 2. Créer les dossiers de volumes vitaux (Images et Cache IA)
+mkdir -p shared models torch_cache
 
-# 3. Build + lancement de tout le stack
-docker compose up --build
+# 3. Build ultra-rapide (propulsé par `uv`) + lancement du stack
+docker compose up -d --build
 
-# 4. Ouvrir un autre terminal pour voir les logs du worker
+# 4. Suivre les calculs du Worker en temps réel
 docker compose logs -f worker
 
-# 5. Dashboard RabbitMQ (optionnel mais très utile)
-# → http://localhost:15672  (guest / guest)
+# 5. Dashboards de Monitoring :
+# → RabbitMQ (Gestion des files) : http://localhost:15672 (guest / guest)
+# → Flower (Monitoring des Workers): http://localhost:5555
 ```
 
 ---
 
-## Structure du projet
+## 📂 Structure du Projet
 
-```
+```text
 solar_pipeline/
-├── docker-compose.yml        # Orchestration des 3 services
+├── docker-compose.yml        # Orchestration (RabbitMQ, Worker, Sensor, Flower)
 │
 ├── sensor/
-│   ├── Dockerfile
-│   ├── sensor.py             # Producteur RabbitMQ (pyranomètre simulé)
-│   └── sky_generator.py      # Générateur d'images ciel synthétiques
+│   ├── Dockerfile            # Optimisé avec `uv`
+│   ├── sensor.py             # Producteur natif Celery (Simule un rotor Pan-Tilt 4 mesures)
+│   └── sky_generator.py      # Générateur fisheye avec horizon urbain (faux bâtiments)
 │
 ├── worker/
-│   ├── Dockerfile
-│   ├── tasks.py              # Tâches Celery (@app.task)
-│   ├── image_processor.py    # Pipeline OpenCV (détection nuages)
-│   └── consumer.py           # Consommateur bas-niveau (pédagogique)
+│   ├── Dockerfile            # Optimisé avec `uv` (Installe PyTorch CPU)
+│   ├── tasks.py              # Orchestrateur de l'IA et du Modèle Physique (@app.task)
+│   └── coe_sol/              # Package métier (Vision & Physique)
+│       ├── horizon.py        # Extraction de la ligne d'horizon sur 360°
+│       ├── masking.py        # Segmentation du ciel par IA (Microsoft MiDaS)
+│       ├── SolarModel.py     # API haut-niveau de modélisation solaire
+│       └── private/ModelKd.py# Cœur mathématique : Modèle de Perez 1990
 │
-└── shared/                   # Volume partagé sensor ↔ worker (images .jpg)
+├── shared/                   # Volume partagé : Évite l'encodage B64 des images
+└── torch_cache/              # Volume persistant : Évite de retélécharger l'IA à chaque build
 ```
 
 ---
 
-## Ce que chaque fichier t'apprend
+## 🧠 Concepts techniques illustrés
 
-### sensor.py → `pika` / producteur AMQP
-
+### 1. Producteur Natif Celery (`sensor.py`)
+Au lieu d'utiliser un client AMQP bas niveau comme `pika`, le capteur est un **client Celery**. Il encapsule un "scan" complet (1 mesure zénithale + 3 mesures inclinées) et l'envoie de manière transparente et résiliente :
 ```python
-# Les 4 lignes essentielles de tout producteur RabbitMQ :
-connection = pika.BlockingConnection(pika.ConnectionParameters(host))
-channel    = connection.channel()
-channel.queue_declare(queue="solar_tasks", durable=True)
-channel.basic_publish(exchange="", routing_key="solar_tasks", body=json_msg)
+celery_app.send_task("solar.process_measurement", args=[message], queue="solar_tasks")
 ```
 
-**`durable=True`** → la queue survit à un redémarrage de RabbitMQ  
-**`delivery_mode=2`** → le message est persisté sur disque
+### 2. Worker Asynchrone avec Tolérance aux Pannes (`tasks.py`)
+L'inférence IA (MiDaS) et l'optimisation mathématique (Grid Search du $k_d$) sont gourmandes en CPU. Elles sont isolées dans un Worker pour ne pas bloquer l'acquisition.
+* **`task_acks_late=True`** : Sécurité maximale. Si le Worker plante pendant le calcul IA, la tâche est remise dans la file.
+* **`max_retries=3`** : Le Worker tente 3 fois de résoudre l'équation atmosphérique avant d'abandonner.
+
+### 3. Modélisation Physique et IA Visuelle (`coe_sol`)
+Le traitement ne repose plus sur de simples filtres OpenCV. 
+1. **Vision :** `masking.py` utilise l'IA **MiDaS** pour estimer la profondeur de la scène et détourer les bâtiments afin de construire le tableau `horizon_profile`.
+2. **Reverse Engineering :** `ModelKd.py` teste 100 valeurs de fraction diffuse ($k_d$) pour trouver celle qui correspond aux vraies mesures du capteur.
+3. **Projection :** Le modèle anisotrope de Perez décompose la lumière en Direct (BTI), Diffus (DTI) et Réfléchi (RTI) pour projeter l'énergie exacte sur une façade cible virtuelle.
 
 ---
 
-### tasks.py → Celery
-
-```python
-app = Celery("solar_pipeline", broker="pyamqp://guest@rabbitmq//")
-
-@app.task(bind=True, max_retries=3)
-def process_solar_measurement(self, message: dict) -> dict:
-    try:
-        result = analyze_sky_image(...)
-        return result
-    except Exception as exc:
-        raise self.retry(exc=exc, countdown=5)  # retry automatique !
-```
-
-**`bind=True`** → `self` donne accès à `self.retry()`, `self.request.id`  
-**`max_retries=3`** → 3 tentatives avant d'abandonner  
-**`task_acks_late=True`** → ACK envoyé APRÈS succès (fiabilité maximale)
-
----
-
-### image_processor.py → OpenCV
-
-```python
-# Pipeline de traitement :
-img_bgr  = cv2.imdecode(buf, cv2.IMREAD_COLOR)        # décoder bytes → array
-img_blur = cv2.GaussianBlur(img_bgr, (5,5), 0)        # réduire bruit
-img_hsv  = cv2.cvtColor(img_blur, cv2.COLOR_BGR2HSV)  # BGR → HSV
-
-# Détecter nuages (pixels blancs = faible saturation, haute valeur)
-mask     = cv2.inRange(img_hsv, [0,0,180], [180,40,255])
-cloud_cover = np.sum(mask > 0) / mask.size
-
-# Correction irradiance
-irr_pred = irr_raw * (1 - cloud_cover * 0.70)
-```
-
----
-
-## Commandes utiles
+## 🛠 Commandes utiles
 
 ```bash
-# Voir les logs en temps réel
-docker compose logs -f sensor
-docker compose logs -f worker
+# Forcer la recréation complète (utile si modification du requirements.txt)
+docker compose up -d --build --force-recreate
 
-# Entrer dans un container pour débugger
+# Entrer dans le conteneur Worker pour déboguer l'IA
 docker compose exec worker bash
-docker compose exec worker python -c "from tasks import process_solar_measurement; print('OK')"
+python -c "import coe_sol.SolarModel; print('Package chargé avec succès')"
 
-# Voir les queues RabbitMQ en CLI
+# Vérifier les files d'attente RabbitMQ en CLI
 docker compose exec rabbitmq rabbitmqctl list_queues
 
-# Lancer le consommateur bas-niveau (pédagogique)
-docker compose exec worker python consumer.py
-
-# Envoyer une tâche Celery manuellement
-docker compose exec worker python -c "
-from tasks import analyze_image_only
-result = analyze_image_only.delay('', 800.0)
-print(result.get(timeout=10))
-"
-
-# Arrêter proprement
-docker compose down
-
-# Tout effacer (volumes compris)
+# Arrêter le système et nettoyer les volumes (Attention: purge RabbitMQ)
 docker compose down -v
 ```
 
 ---
 
-## Aller plus loin
+## 🔄 Flux de Données Final (JSON)
 
-### Étape suivante — Modèle ML réel
-
-Remplace la formule dans `image_processor.py` par un vrai modèle :
-
-```python
-import torch
-model = torch.load("cloud_net.pt")  # ton modèle entraîné
-
-def predict_irradiance(img_tensor, irr_raw):
-    cloud_cover = model(img_tensor).item()
-    return irr_raw * (1 - cloud_cover * 0.70)
+**1. `sensor.py` génère un scan 360° simulé :**
+```json
+{
+  "id": 42,
+  "timestamp": "2026-04-06 10:15:30.000",
+  "image_path": "/app/shared/sky_00042.jpg",
+  "origin": { "irradiance": 850.0 },
+  "fits":[
+    {"azimuth": 180.0, "inclination": 45.0, "irradiance": 910.0},
+    {"azimuth": 90.0, "inclination": 60.0, "irradiance": 600.0}
+  ]
+}
 ```
 
-### Ajouter Redis comme backend de résultats
-
-```yaml
-# docker-compose.yml
-redis:
-  image: redis:7-alpine
-  ports: ["6379:6379"]
-```
-
-```python
-# tasks.py
-app = Celery(
-    broker="pyamqp://guest@rabbitmq//",
-    backend="redis://redis:6379/0",   # stockage des résultats
-)
-```
-
-### Monitorer avec Flower (dashboard Celery)
-
-```yaml
-# docker-compose.yml
-flower:
-  image: mher/flower
-  command: celery --broker=pyamqp://guest@rabbitmq// flower
-  ports: ["5555:5555"]
-```
-→ http://localhost:5555
-
----
-
-## Flux de données complet
-
-```
-1. sensor.py génère :
-   {
-     "id": 42,
-     "irradiance_raw": 783.5,
-     "cloud_cover_gt": 0.23,
-     "image_b64": "/9j/4AAQSkZJRg..."
-   }
-
-2. RabbitMQ reçoit le JSON dans la queue "solar_tasks"
-
-3. Celery worker appelle process_solar_measurement(message)
-
-4. image_processor.analyze_sky_image() retourne :
-   ImageAnalysis(
-     cloud_cover=0.21,
-     brightness_mean=198.4,
-     cloud_factor=0.853,
-     irradiance_pred=668.5
-   )
-
-5. Résultat final :
-   {
-     "irradiance_raw": 783.5,
-     "irradiance_pred": 668.5,   ← prédiction corrigée
-     "cloud_cover": 0.21,
-     "processing_ms": 47.3
-   }
+**2. Le Worker Celery (`tasks.py`) exécute la pipeline `coe_sol` et retourne :**
+```json
+{
+  "measure_id": 42,
+  "input_ghi": 850.0,
+  "timestamp_utc": "2026-04-06 10:15:30.000",
+  "results":[
+    {
+      "time": "2026-04-06 10:15:30.000",
+      "pyrano-dest-1_value": 720.5    // ← L'énergie projetée exacte sur la façade (W/m²)
+    }
+  ],
+  "processing_time_ms": 612.4,
+  "status": "SUCCESS"
+}
 ```
