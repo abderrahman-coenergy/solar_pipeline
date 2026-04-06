@@ -79,7 +79,7 @@ L'inférence IA (MiDaS) et l'optimisation mathématique (Grid Search du $k_d$) s
 * **`max_retries=3`** : Le Worker tente 3 fois de résoudre l'équation atmosphérique avant d'abandonner.
 
 ### 3. Modélisation Physique et IA Visuelle (`coe_sol`)
-Le traitement ne repose plus sur de simples filtres OpenCV. 
+
 1. **Vision :** `masking.py` utilise l'IA **MiDaS** pour estimer la profondeur de la scène et détourer les bâtiments afin de construire le tableau `horizon_profile`.
 2. **Reverse Engineering :** `ModelKd.py` teste 100 valeurs de fraction diffuse ($k_d$) pour trouver celle qui correspond aux vraies mesures du capteur.
 3. **Projection :** Le modèle anisotrope de Perez décompose la lumière en Direct (BTI), Diffus (DTI) et Réfléchi (RTI) pour projeter l'énergie exacte sur une façade cible virtuelle.
