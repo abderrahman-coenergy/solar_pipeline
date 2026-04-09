@@ -104,7 +104,7 @@ def process_solar_measurement(self, message: dict) -> dict:
 
         return {
             "measure_id":         msg_id,
-            "input_ghi":          irr_origin,
+            #"input_ghi":          irr_origin,
             "timestamp_utc":      timestamp_str,
             "results":            projection_data,
             "processing_time_ms": elapsed_ms,
