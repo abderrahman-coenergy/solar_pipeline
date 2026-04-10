@@ -6,6 +6,8 @@ import pandas as pd
 from datetime import datetime
 from celery import Celery
 from celery.utils.log import get_task_logger
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # ─── IMPORTATION DU PACKAGE INTERNE (coe_sol) ──────────────────────────────
 import coe_sol.SolarModel as sm

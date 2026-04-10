@@ -82,7 +82,8 @@ def run():
 
         # 3. Simulation de l'acquisition matérielle (Le Rotor)
         hour_fraction = (time.time() % 86400) / 86400
-        base_irr      = simulate_irradiance(hour_fraction)
+        
+        base_irr = 800.0 + random.uniform(-50, 50)
         
         # A. Position 0 : Zénith (Origin - GHI)
         mesure_origin = base_irr

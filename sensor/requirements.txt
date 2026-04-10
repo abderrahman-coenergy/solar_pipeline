@@ -1,4 +1,0 @@
-celery==5.3.6
-opencv-python-headless==4.9.0.80
-numpy==1.26.4
-pillow

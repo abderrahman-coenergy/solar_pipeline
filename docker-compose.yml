@@ -25,7 +25,8 @@ services:
   # ─────────────────────────────────────────────
   sensor:
     build:
-      context: ./sensor
+      context: .                 # On définit la racine comme contexte
+      dockerfile: sensor/Dockerfile
     container_name: sensor
     depends_on:
       rabbitmq:
@@ -41,7 +42,8 @@ services:
   # ─────────────────────────────────────────────
   worker:
     build:
-      context: ./worker
+      context: .                 # On définit la racine comme contexte
+      dockerfile: worker/Dockerfile
     container_name: worker
     depends_on:
       rabbitmq:
@@ -50,7 +52,10 @@ services:
       RABBITMQ_HOST: rabbitmq
     volumes:
       - ./shared:/app/shared
-      - ./torch_cache:/root/.cache/torch
+    deploy:
+      resources:
+        limits:
+          memory: 4G # Ou plus si ton PC le permet
     # La commande qui DOIT être exécutée, avec les bonnes options
     command: celery -A tasks worker --loglevel=info --concurrency=1 -Q solar_tasks -E
 
