@@ -24,7 +24,7 @@ Ce projet est une infrastructure asynchrone complète (End-to-End) permettant de
 cd solar_pipeline
 
 # 2. Créer les dossiers de volumes vitaux (Images et Cache IA)
-mkdir -p shared models torch_cache
+mkdir -p shared torch_cache
 
 # 3. Build ultra-rapide (propulsé par `uv`) + lancement du stack
 docker compose up -d --build
@@ -59,7 +59,7 @@ solar_pipeline/
 │       ├── SolarModel.py     # API haut-niveau de modélisation solaire
 │       └── private/ModelKd.py# Cœur mathématique : Modèle de Perez 1990
 │
-├── shared/                   # Volume partagé : Évite l'encodage B64 des images
+├── shared/                   # Volume partagé : Évite l'encodage B64 lourd des images
 └── torch_cache/              # Volume persistant : Évite de retélécharger l'IA à chaque build
 ```
 
@@ -67,22 +67,19 @@ solar_pipeline/
 
 ## 🧠 Concepts techniques illustrés
 
-### 1. Producteur Natif Celery (`sensor.py`)
-Au lieu d'utiliser un client AMQP bas niveau comme `pika`, le capteur est un **client Celery**. Il encapsule un "scan" complet (1 mesure zénithale + 3 mesures inclinées) et l'envoie de manière transparente et résiliente :
-```python
-celery_app.send_task("solar.process_measurement", args=[message], queue="solar_tasks")
-```
+### 1. "Masked-Time Processing" et Simulation Matérielle (`sensor.py`)
+Le système simule les contraintes physiques réelles d'un pyranomètre de Classe 2 (Hukseflux SR05). La technologie thermopile ayant une inertie de ~18s par mesure, un scan complet prend environ 1 minute.
+Le capteur envoie son scan via **Celery**, ce qui permet au Worker de traiter l'IA et la physique lourde en "temps masqué", pendant que le capteur physique entame sa rotation suivante.
 
 ### 2. Worker Asynchrone avec Tolérance aux Pannes (`tasks.py`)
-L'inférence IA (MiDaS) et l'optimisation mathématique (Grid Search du $k_d$) sont gourmandes en CPU. Elles sont isolées dans un Worker pour ne pas bloquer l'acquisition.
+L'inférence IA (MiDaS) et l'optimisation mathématique (Grid Search du $k_d$) sont isolées dans un Worker pour ne pas bloquer l'acquisition IoT.
 * **`task_acks_late=True`** : Sécurité maximale. Si le Worker plante pendant le calcul IA, la tâche est remise dans la file.
-* **`max_retries=3`** : Le Worker tente 3 fois de résoudre l'équation atmosphérique avant d'abandonner.
+* **`max_retries=3`** : Le Worker tente de résoudre l'équation atmosphérique 3 fois avant d'abandonner.
 
 ### 3. Modélisation Physique et IA Visuelle (`coe_sol`)
-
-1. **Vision :** `masking.py` utilise l'IA **MiDaS** pour estimer la profondeur de la scène et détourer les bâtiments afin de construire le tableau `horizon_profile`.
-2. **Reverse Engineering :** `ModelKd.py` teste 100 valeurs de fraction diffuse ($k_d$) pour trouver celle qui correspond aux vraies mesures du capteur.
-3. **Projection :** Le modèle anisotrope de Perez décompose la lumière en Direct (BTI), Diffus (DTI) et Réfléchi (RTI) pour projeter l'énergie exacte sur une façade cible virtuelle.
+1. **Vision :** `masking.py` utilise l'IA **MiDaS** pour estimer la profondeur de la scène et détourer les bâtiments afin de construire le tableau `horizon_profile` (obstacles sur 360°).
+2. **Reverse Engineering :** `ModelKd.py` teste 100 valeurs de fraction diffuse ($k_d$) pour trouver la composition de l'atmosphère qui correspond aux vraies mesures du capteur incliné.
+3. **Projection :** Le modèle anisotrope de Perez décompose la lumière en Direct (BTI), Diffus (DTI) et Réfléchi (RTI) pour projeter l'énergie exacte sur une façade cible virtuelle, en tenant compte de l'albédo urbain et du *Sky View Factor*.
 
 ---
 
@@ -92,7 +89,7 @@ L'inférence IA (MiDaS) et l'optimisation mathématique (Grid Search du $k_d$) s
 # Forcer la recréation complète (utile si modification du requirements.txt)
 docker compose up -d --build --force-recreate
 
-# Entrer dans le conteneur Worker pour déboguer l'IA
+# Entrer dans le conteneur Worker pour déboguer
 docker compose exec worker bash
 python -c "import coe_sol.SolarModel; print('Package chargé avec succès')"
 
@@ -107,16 +104,18 @@ docker compose down -v
 
 ## 🔄 Flux de Données Final (JSON)
 
-**1. `sensor.py` génère un scan 360° simulé :**
+**1. `sensor.py` génère un scan 360° simulé (ex: toutes les 60s) :**
 ```json
 {
-  "id": 42,
-  "timestamp": "2026-04-06 10:15:30.000",
-  "image_path": "/app/shared/sky_00042.jpg",
-  "origin": { "irradiance": 850.0 },
+  "id": 1,
+  "timestamp": "2026-04-09 11:16:16.000",
+  "image_path": "/app/shared/sky_00001.jpg",
+  "cloud_cover_gt": 0.4532,
+  "origin": { "irradiance": 984.5 },
   "fits":[
-    {"azimuth": 180.0, "inclination": 45.0, "irradiance": 910.0},
-    {"azimuth": 90.0, "inclination": 60.0, "irradiance": 600.0}
+    {"azimuth": 180.0, "inclination": 45.0, "irradiance": 1132.1},
+    {"azimuth": 90.0,  "inclination": 60.0, "irradiance": 836.8},
+    {"azimuth": 270.0, "inclination": 60.0, "irradiance": 590.6}
   ]
 }
 ```
@@ -124,16 +123,20 @@ docker compose down -v
 **2. Le Worker Celery (`tasks.py`) exécute la pipeline `coe_sol` et retourne :**
 ```json
 {
-  "measure_id": 42,
-  "input_ghi": 850.0,
-  "timestamp_utc": "2026-04-06 10:15:30.000",
+  "measure_id": 1,
+  "input_ghi": 984.5,
+  "timestamp_utc": "2026-04-09 11:16:16.000",
+  "processing_time_ms": 674.0,
+  "status": "SUCCESS",
   "results":[
     {
-      "time": "2026-04-06 10:15:30.000",
-      "pyrano-dest-1_value": 720.5    // ← L'énergie projetée exacte sur la façade (W/m²)
+      "time": "2026-04-09 11:16:16.000",
+      "pyrano-origin": 984.5,
+      "pyrano-fit-1_value": 1132.1,
+      "pyrano-dest-1_azimuth": 180.0,
+      "pyrano-dest-1_tilt": 90.0,
+      "pyrano-dest-1_value": 773.15    // ← L'énergie projetée exacte sur la façade (W/m²)
     }
-  ],
-  "processing_time_ms": 612.4,
-  "status": "SUCCESS"
+  ]
 }
 ```
